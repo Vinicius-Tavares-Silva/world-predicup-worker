@@ -1,5 +1,285 @@
 # World Predicup Live Match Worker Plan
 
+## Current Implementation
+
+This repository now contains a first TypeScript worker scaffold:
+
+- configuration loading and validation
+- provider interface with mock, WC2026 API, and API-Football live-match providers
+- snapshot and event normalization into the webhook payload contract
+- stable idempotency key generation
+- webhook delivery with retry and dry-run mode
+- SQLite persistence using Node's built-in `node:sqlite`
+- unit tests for config, provider mapping, normalization, and idempotency
+
+## Local Development
+
+Use Node.js 24 or newer.
+
+```bash
+npm install
+npm test
+npm run build
+npm run dev
+```
+
+The worker defaults to `DRY_RUN=true`, so `npm run dev` prints the mock webhook payload instead of calling an API. It stores local state at `./data/worker.sqlite` and will skip already-sent idempotency keys on later runs.
+
+Copy `.env.example` to `.env` when connecting it to a real endpoint. Set `DRY_RUN=false`, `WORLD_PREDICUP_API_BASE_URL`, and `WORLD_PREDICUP_WEBHOOK_TOKEN` before sending real webhook requests.
+
+For API-Football, use:
+
+```env
+SPORTS_DATA_PROVIDER=api-football
+SPORTS_DATA_API_KEY=your-api-football-key
+API_FOOTBALL_LEAGUE_ID=1
+API_FOOTBALL_SEASON=2026
+API_FOOTBALL_LIVE_SCOPE=1
+```
+
+`API_FOOTBALL_LIVE_SCOPE=1` polls only live World Cup matches. Set it to `all` only when intentionally checking every live football match and filtering locally.
+
+To validate the API-Football key and fixture mapping before any World Cup matches are live:
+
+```bash
+npm run probe:api-football
+```
+
+For WC2026 API, use:
+
+```env
+SPORTS_DATA_PROVIDER=wc2026
+SPORTS_DATA_API_KEY=your-wc2026-key
+WC2026_API_BASE_URL=https://api.wc2026api.com
+WC2026_USE_TEST_ENDPOINT=true
+```
+
+`WC2026_USE_TEST_ENDPOINT=true` makes `npm run dev` poll `/test/match`, which cycles through a fictional Brazil vs Argentina match. Set it to `false` for production polling via `/matches?status=live`.
+
+To validate the WC2026 key and sandbox live-match mapping:
+
+```bash
+npm run probe:wc2026
+```
+
+## Trigger.dev Deployment
+
+This worker is configured for Trigger.dev project `proj_futvdbmbattdpsiimydk`.
+
+```bash
+npm run trigger:dev
+npm run trigger:deploy
+```
+
+The deployed task is `poll-live-world-cup-matches`. The intended production setup is for Trigger.dev to run this task every minute, while the worker itself decides whether the current minute is allowed to spend a sports-data API request.
+
+```ts
+cron: {
+  pattern: "*/1 * * * *",
+  timezone: "UTC",
+},
+```
+
+Set these environment variables in Trigger.dev production:
+
+```env
+SPORTS_DATA_PROVIDER=wc2026
+SPORTS_DATA_API_KEY=your-wc2026-key
+WC2026_API_BASE_URL=https://api.wc2026api.com
+WC2026_USE_TEST_ENDPOINT=true
+DRY_RUN=true
+STATE_DB_PATH=/tmp/worker.sqlite
+```
+
+For real webhook delivery, change `DRY_RUN=false` and set:
+
+```env
+WORLD_PREDICUP_API_BASE_URL=https://your-api-base-url
+WORLD_PREDICUP_WEBHOOK_TOKEN=your-webhook-token
+WORLD_PREDICUP_WEBHOOK_PATH=/world-predicup/live-match-webhook
+```
+
+Trigger.dev does not use the local SQLite state store for scheduled runs. It still sends the stable `Idempotency-Key` header, so the receiving API should dedupe repeated score snapshots.
+
+## Trigger Minute Loop With 100 Daily API Calls
+
+Trigger.dev should wake the worker every minute for operational simplicity. A Trigger run is cheap, gives observability, and lets us react quickly when a match window starts. The important rule is that most Trigger runs must exit without calling the sports data provider.
+
+The worker needs a local decision layer before calling WC2026 API:
+
+```text
+Trigger runs every minute
+-> load cached tournament schedule and daily budget state
+-> decide if this minute is inside an active polling window
+-> decide if the current polling cadence allows a provider request
+-> if no, exit with reason: outside_window / cadence_skip / budget_exhausted
+-> if yes, call provider once, normalize all returned live matches, send webhook updates
+```
+
+For WC2026 API, prefer aggregate requests:
+
+```http
+GET /matches?status=live
+GET /matches
+```
+
+One aggregate live request should cover all currently live World Cup matches, including days where two matches happen at the same time. The budget must be based on active time windows, not the number of simultaneous games.
+
+### Budget Targets
+
+For a 100-request/day free tier, reserve requests before allocating live polling:
+
+```text
+Daily hard limit:                 100 requests
+Fixture/schedule refresh:           2 requests
+Pre-match window checks:            8 requests
+Post-match reconciliation:         10 requests
+Retry/manual buffer:               20 requests
+Available live requests:           60 requests
+```
+
+On match days, compute the interval from the schedule:
+
+```text
+active_window_minutes = sum(merged polling windows)
+live_interval_minutes = ceil(active_window_minutes / available_live_requests)
+```
+
+Example with 4 kickoff windows:
+
+```text
+window duration: kickoff - 30m through kickoff + 150m = 180 minutes
+4 windows * 180 minutes = 720 active minutes
+720 active minutes / 60 live requests = one provider call every 12 minutes
+```
+
+Example with 2 games at the same time:
+
+```text
+18:00 Brazil vs Argentina
+18:00 Germany vs France
+
+Merged window: 17:30-20:30
+Provider call at 17:30 covers both if /matches?status=live returns both
+Provider call at 17:42 covers both
+Provider call at 17:54 covers both
+```
+
+If the provider ever requires per-match requests, multiply the window cost by the number of matches in that merged window and increase the interval accordingly. With a 100/day limit, per-match live polling should be treated as a fallback, not the default.
+
+### Polling Windows
+
+Build windows from the known World Cup schedule:
+
+```ts
+type MatchWindow = {
+  matchId: string;
+  kickoffAt: string;
+  startsAt: string; // kickoff - 30 minutes
+  endsAt: string;   // kickoff + 150 minutes
+};
+
+type MergedPollingWindow = {
+  startsAt: string;
+  endsAt: string;
+  matchIds: string[];
+  intervalMinutes: number;
+};
+```
+
+Merge overlapping windows so simultaneous or back-to-back matches share provider calls. A day with four matches might have four windows, but a day with two simultaneous matches still has one merged window for that kickoff slot.
+
+### State Needed
+
+Trigger runtime state should be external, because in-memory state does not survive across runs.
+
+Minimum persisted state:
+
+```text
+provider_request_budget
+- date
+- provider
+- daily_limit
+- requests_used
+- requests_reserved
+- last_provider_call_at
+- next_allowed_provider_call_at
+
+match_polling_windows
+- date
+- starts_at
+- ends_at
+- match_ids
+- interval_minutes
+
+provider_snapshots
+- provider
+- external_match_id
+- status
+- minute
+- home_score
+- away_score
+- fetched_at
+
+sent_updates
+- idempotency_key
+- external_match_id
+- sent_at
+- payload_hash
+```
+
+Storage options:
+
+- Use the main World Predicup database if the worker can safely access service-role APIs.
+- Use Trigger.dev environment plus a small external store only for budget/sent-update state.
+- Use Supabase tables for budget, schedule windows, and idempotency, which is the most practical path for this project.
+
+### Decision Rules
+
+Each minute, run these checks in order:
+
+1. If today has no scheduled matches and no match finished in the last 30 minutes, do not call the provider.
+2. If now is outside all merged polling windows, do not call the provider.
+3. If `requests_used >= daily_limit - retry_buffer`, do not call the provider.
+4. If `now < next_allowed_provider_call_at`, do not call the provider.
+5. Call the provider once.
+6. Increment `requests_used`.
+7. Set `next_allowed_provider_call_at = now + intervalMinutes`.
+8. Send webhook only if the score/status changed or the match moved to a meaningful phase.
+
+Meaningful phase/status updates:
+
+- `scheduled -> live`
+- score changed
+- `live -> halftime`
+- `halftime -> live`
+- `live -> finished`
+- penalty score changed
+- final reconciliation after finished
+
+### Implementation Plan
+
+1. Add a `BudgetStore` interface with methods to read/update daily request counters and next allowed provider call time.
+2. Add a `ScheduleStore` interface that can load World Cup fixtures and build merged polling windows by date.
+3. Add Supabase-backed implementations for `BudgetStore`, `ScheduleStore`, and `StateStore` for Trigger production.
+4. Keep SQLite only for local development.
+5. Change `poll-live-world-cup-matches` so it always starts every minute but exits early with a structured log reason when no provider request should be made.
+6. Add `ProviderCallDecision` tests for:
+   - no matches today
+   - outside polling window
+   - inside polling window but cadence not reached
+   - daily budget exhausted
+   - simultaneous matches merged into one window
+   - score/status changed sends webhook
+   - unchanged snapshot does not send webhook
+7. Add dashboard logs for every run:
+   - `decision`
+   - `requestsUsed`
+   - `dailyLimit`
+   - `nextAllowedProviderCallAt`
+   - `activeWindowMatchIds`
+8. Re-enable the Trigger cron every minute only after the budget gate is in place.
+
 ## Goal
 
 Build a worker that collects official or licensed World Cup 2026 live match data, normalizes score and event updates, and sends them to the World Predicup API minute by minute.
@@ -22,8 +302,11 @@ Recommended environment variables:
 ```env
 WORLD_PREDICUP_API_BASE_URL=https://api.example.com
 WORLD_PREDICUP_WEBHOOK_TOKEN=replace-me
-SPORTS_DATA_PROVIDER=mock
+SPORTS_DATA_PROVIDER=api-football
 SPORTS_DATA_API_KEY=replace-me
+API_FOOTBALL_LEAGUE_ID=1
+API_FOOTBALL_SEASON=2026
+API_FOOTBALL_LIVE_SCOPE=1
 POLL_INTERVAL_LIVE_SECONDS=60
 POLL_INTERVAL_PRE_MATCH_SECONDS=300
 ```

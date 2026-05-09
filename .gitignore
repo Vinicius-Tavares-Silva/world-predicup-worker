@@ -1,0 +1,11 @@
+node_modules/
+dist/
+data/
+.env
+.env.local
+coverage/
+
+.trigger
+trigger.config.js
+trigger.config.js.map
+trigger.config.d.ts

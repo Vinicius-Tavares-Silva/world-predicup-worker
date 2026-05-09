@@ -1,0 +1,30 @@
+{
+  "name": "world-predicup-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "trigger:dev": "npx trigger.dev@latest dev",
+    "trigger:deploy": "npx trigger.dev@latest deploy",
+    "probe:api-football": "tsx src/probe-api-football.ts",
+    "probe:wc2026": "tsx src/probe-wc2026.ts",
+    "start": "node dist/src/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "devDependencies": {
+    "@trigger.dev/build": "^4.4.5",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@trigger.dev/sdk": "^4.4.5"
+  }
+}
