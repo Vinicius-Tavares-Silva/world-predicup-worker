@@ -16,10 +16,6 @@ const triggerLogger = {
 
 export const pollLiveWorldCupMatches = schedules.task({
   id: "poll-live-world-cup-matches",
-  cron: {
-    pattern: "*/5 * * * *",
-    timezone: "UTC",
-  },
   maxDuration: 120,
   run: async (payload) => {
     logger.log("Polling World Predicup live match provider", {
