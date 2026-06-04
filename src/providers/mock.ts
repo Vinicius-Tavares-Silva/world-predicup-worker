@@ -1,25 +1,10 @@
 import type { LiveDataProvider, ProviderFixture, ProviderMatchEvent, ProviderMatchSnapshot } from "../types.js";
 
-const fixture: ProviderFixture = {
-  externalMatchId: "mock-bra-arg-2026-06-15",
-  matchId: "world-predicup-match-123",
-  homeTeam: {
-    id: "BRA",
-    name: "Brazil",
-  },
-  awayTeam: {
-    id: "ARG",
-    name: "Argentina",
-  },
-  kickoffAt: "2026-06-15T18:00:00.000Z",
-  status: "live",
-};
-
 export class MockLiveDataProvider implements LiveDataProvider {
   readonly name = "mock";
 
   async getFixtures(): Promise<ProviderFixture[]> {
-    return [fixture];
+    return [mockFixture()];
   }
 
   async getLiveMatches(): Promise<ProviderMatchSnapshot[]> {
@@ -27,6 +12,7 @@ export class MockLiveDataProvider implements LiveDataProvider {
   }
 
   async getMatchSnapshot(externalMatchId: string): Promise<ProviderMatchSnapshot> {
+    const fixture = mockFixture();
     if (externalMatchId !== fixture.externalMatchId) {
       throw new Error(`Mock fixture not found: ${externalMatchId}`);
     }
@@ -39,6 +25,7 @@ export class MockLiveDataProvider implements LiveDataProvider {
   }
 
   private buildSnapshot(now = new Date()): ProviderMatchSnapshot {
+    const fixture = mockFixture();
     const simulatedMinute = Number(process.env.MOCK_MATCH_MINUTE ?? "67");
     const homeScore = simulatedMinute >= 66 ? 2 : 1;
     const awayScore = 1;
@@ -77,4 +64,21 @@ export class MockLiveDataProvider implements LiveDataProvider {
       },
     };
   }
+}
+
+function mockFixture(): ProviderFixture {
+  return {
+    externalMatchId: process.env.MOCK_MATCH_EXTERNAL_ID ?? "mock-bra-arg-2026-06-15",
+    matchId: process.env.MOCK_MATCH_ID ?? "world-predicup-match-123",
+    homeTeam: {
+      id: process.env.MOCK_HOME_TEAM_ID ?? "BRA",
+      name: process.env.MOCK_HOME_TEAM_NAME ?? "Brazil",
+    },
+    awayTeam: {
+      id: process.env.MOCK_AWAY_TEAM_ID ?? "ARG",
+      name: process.env.MOCK_AWAY_TEAM_NAME ?? "Argentina",
+    },
+    kickoffAt: process.env.MOCK_KICKOFF_AT ?? "2026-06-15T18:00:00.000Z",
+    status: "live",
+  };
 }

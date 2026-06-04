@@ -15,7 +15,7 @@ export class WebhookClient {
       return { status: "dry_run" };
     }
 
-    const url = new URL(this.config.webhookPath, withTrailingSlash(this.config.worldPredicupApiBaseUrl));
+    const url = buildWebhookUrl(this.config.worldPredicupApiBaseUrl, this.config.webhookPath);
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -50,8 +50,10 @@ export class WebhookClient {
   }
 }
 
-function withTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
+export function buildWebhookUrl(baseUrl: string, webhookPath: string): URL {
+  const base = baseUrl.replace(/\/+$/, "");
+  const path = webhookPath.replace(/^\/+/, "");
+  return new URL(`${base}/${path}`);
 }
 
 function delay(milliseconds: number): Promise<void> {

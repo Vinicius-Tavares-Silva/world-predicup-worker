@@ -27,6 +27,95 @@ The worker defaults to `DRY_RUN=true`, so `npm run dev` prints the mock webhook 
 
 Copy `.env.example` to `.env` when connecting it to a real endpoint. Set `DRY_RUN=false`, `WORLD_PREDICUP_API_BASE_URL`, and `WORLD_PREDICUP_WEBHOOK_TOKEN` before sending real webhook requests.
 
+## Local World Predicup Integration Test
+
+The sibling app repo receives worker updates through its local Supabase Edge Function:
+
+```bash
+cd ../world-predicup
+supabase start
+supabase status -o env
+cp supabase/functions/.env.local.example supabase/functions/.env.local
+```
+
+The function env file only needs `LIVE_MATCH_WEBHOOK_TOKEN`; the Supabase CLI injects the local Supabase URL and service role key. Serve the receiver:
+
+```bash
+supabase functions serve live-match-webhook --env-file supabase/functions/.env.local
+```
+
+In this worker repo, run the smoke test with the same local service role key:
+
+```bash
+WORLD_PREDICUP_SUPABASE_URL=http://127.0.0.1:54321 \
+WORLD_PREDICUP_SUPABASE_SERVICE_ROLE_KEY='<local-service-role-key>' \
+WORLD_PREDICUP_WEBHOOK_TOKEN=local-worker-webhook-token \
+npm run test:local:webhook
+```
+
+The script picks one seeded group-stage match, maps the mock provider to it, runs the worker once with `DRY_RUN=false`, and verifies the match row changed to `in_progress` with score `2-1`.
+
+To manually simulate a match update through the same local webhook, use:
+
+```bash
+WORLD_PREDICUP_SUPABASE_URL=http://127.0.0.1:54321 \
+WORLD_PREDICUP_SUPABASE_SERVICE_ROLE_KEY='<local-service-role-key>' \
+WORLD_PREDICUP_WEBHOOK_TOKEN=local-worker-webhook-token \
+npm run simulate:match -- --match 1 --event start
+```
+
+`--match` accepts either a UUID or a 1-based ordinal from the local match schedule ordered by date. Useful examples:
+
+```bash
+# Start match 1 at 0-0
+npm run simulate:match -- --match 1 --event start
+
+# Set match 1 live at minute 67 with score 2-1
+npm run simulate:match -- --match 1 --event live --home 2 --away 1 --minute 67
+
+# Finish match 1 with score 3-2
+npm run simulate:match -- --match 1 --event finish --home 3 --away 2 --minute 90
+```
+
+Optional flags:
+
+```text
+--provider local-sim
+--external-id custom-provider-match-id
+--reset true|false
+```
+
+The simulator upserts a local provider mapping, sends a fake `match_snapshot` request to `live-match-webhook`, and prints the updated World Predicup match row.
+
+## WC2026 Match Mapping Sync
+
+The production webhook resolves provider matches through the World Predicup `match_provider_mappings` table. Populate it from the WC2026 `/matches` endpoint with:
+
+```bash
+SPORTS_DATA_PROVIDER=wc2026 \
+SPORTS_DATA_API_KEY='<wc2026-api-key>' \
+WC2026_API_BASE_URL=https://api.wc2026api.com \
+WORLD_PREDICUP_SUPABASE_URL='https://<project-ref>.supabase.co' \
+WORLD_PREDICUP_SUPABASE_SERVICE_ROLE_KEY='<service-role-key>' \
+npm run sync:wc2026-mappings
+```
+
+The command defaults to dry-run mode. It prints fetched, matched, reversed, unmatched, and ambiguous counts without writing rows.
+
+After the dry run reports no unmatched or ambiguous matches, write the mappings:
+
+```bash
+SYNC_WC2026_MAPPINGS_WRITE=true \
+SPORTS_DATA_PROVIDER=wc2026 \
+SPORTS_DATA_API_KEY='<wc2026-api-key>' \
+WC2026_API_BASE_URL=https://api.wc2026api.com \
+WORLD_PREDICUP_SUPABASE_URL='https://<project-ref>.supabase.co' \
+WORLD_PREDICUP_SUPABASE_SERVICE_ROLE_KEY='<service-role-key>' \
+npm run sync:wc2026-mappings
+```
+
+The sync matches by kickoff time plus normalized home/away team names, with aliases for English provider names and Portuguese app names. It refuses to write ambiguous mappings.
+
 For API-Football, use:
 
 ```env
@@ -71,11 +160,11 @@ npm run trigger:dev
 npm run trigger:deploy
 ```
 
-The deployed task is `poll-live-world-cup-matches`. The intended production setup is for Trigger.dev to run this task every minute, while the worker itself decides whether the current minute is allowed to spend a sports-data API request.
+The deployed task is `poll-live-world-cup-matches`. Trigger.dev runs it every 5 minutes. The worker checks the known World Cup schedule before calling the sports-data provider, so runs outside match windows exit successfully with `no_live_match` and do not spend a provider request.
 
 ```ts
 cron: {
-  pattern: "*/1 * * * *",
+  pattern: "*/5 * * * *",
   timezone: "UTC",
 },
 ```
@@ -103,16 +192,15 @@ Trigger.dev does not use the local SQLite state store for scheduled runs. It sti
 
 ## Trigger Minute Loop With 100 Daily API Calls
 
-Trigger.dev should wake the worker every minute for operational simplicity. A Trigger run is cheap, gives observability, and lets us react quickly when a match window starts. The important rule is that most Trigger runs must exit without calling the sports data provider.
+Trigger.dev wakes the worker every 5 minutes for operational simplicity. A Trigger run is cheap, gives observability, and lets us react quickly when a match window starts. The important rule is that most Trigger runs must exit without calling the sports data provider.
 
 The worker needs a local decision layer before calling WC2026 API:
 
 ```text
-Trigger runs every minute
--> load cached tournament schedule and daily budget state
+Trigger runs every 5 minutes
+-> check the known tournament schedule
 -> decide if this minute is inside an active polling window
--> decide if the current polling cadence allows a provider request
--> if no, exit with reason: outside_window / cadence_skip / budget_exhausted
+-> if no, exit with reason: no_live_match
 -> if yes, call provider once, normalize all returned live matches, send webhook updates
 ```
 
@@ -145,12 +233,18 @@ active_window_minutes = sum(merged polling windows)
 live_interval_minutes = ceil(active_window_minutes / available_live_requests)
 ```
 
-Example with 4 kickoff windows:
+Example with 4 group-stage kickoff windows:
 
 ```text
 window duration: kickoff - 30m through kickoff + 150m = 180 minutes
 4 windows * 180 minutes = 720 active minutes
 720 active minutes / 60 live requests = one provider call every 12 minutes
+```
+
+Knockout windows are longer to cover extra time, penalties, and final reconciliation:
+
+```text
+knockout window duration: kickoff - 30m through kickoff + 210m = 240 minutes
 ```
 
 Example with 2 games at the same time:
@@ -176,7 +270,7 @@ type MatchWindow = {
   matchId: string;
   kickoffAt: string;
   startsAt: string; // kickoff - 30 minutes
-  endsAt: string;   // kickoff + 150 minutes
+  endsAt: string;   // group: kickoff + 150m, knockout: kickoff + 210m
 };
 
 type MergedPollingWindow = {
@@ -236,16 +330,11 @@ Storage options:
 
 ### Decision Rules
 
-Each minute, run these checks in order:
+Each 5-minute run checks:
 
-1. If today has no scheduled matches and no match finished in the last 30 minutes, do not call the provider.
-2. If now is outside all merged polling windows, do not call the provider.
-3. If `requests_used >= daily_limit - retry_buffer`, do not call the provider.
-4. If `now < next_allowed_provider_call_at`, do not call the provider.
-5. Call the provider once.
-6. Increment `requests_used`.
-7. Set `next_allowed_provider_call_at = now + intervalMinutes`.
-8. Send webhook only if the score/status changed or the match moved to a meaningful phase.
+1. If now is outside all known match windows, do not call the provider and return `no_live_match`.
+2. If now is inside a match window, call the provider once.
+3. Send webhook updates using stable idempotency keys so the receiver can dedupe repeated snapshots.
 
 Meaningful phase/status updates:
 
@@ -263,7 +352,7 @@ Meaningful phase/status updates:
 2. Add a `ScheduleStore` interface that can load World Cup fixtures and build merged polling windows by date.
 3. Add Supabase-backed implementations for `BudgetStore`, `ScheduleStore`, and `StateStore` for Trigger production.
 4. Keep SQLite only for local development.
-5. Change `poll-live-world-cup-matches` so it always starts every minute but exits early with a structured log reason when no provider request should be made.
+5. Change `poll-live-world-cup-matches` so it starts every 5 minutes but exits early with a structured log reason when no provider request should be made.
 6. Add `ProviderCallDecision` tests for:
    - no matches today
    - outside polling window
@@ -278,7 +367,7 @@ Meaningful phase/status updates:
    - `dailyLimit`
    - `nextAllowedProviderCallAt`
    - `activeWindowMatchIds`
-8. Re-enable the Trigger cron every minute only after the budget gate is in place.
+8. Re-enable the Trigger cron only after the budget gate is in place.
 
 ## Goal
 
@@ -456,7 +545,7 @@ The worker should load the known FIFA schedule before each match day, group matc
 ```ts
 type PollingWindow = {
   startsAt: string; // kickoff - 30 minutes
-  endsAt: string;   // kickoff + 150 minutes
+  endsAt: string;   // group: kickoff + 150m, knockout: kickoff + 210m
   matchIds: string[];
   requestIntervalSeconds: number;
 };
