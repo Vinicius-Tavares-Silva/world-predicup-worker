@@ -94,17 +94,17 @@ export class Wc2026Provider implements LiveDataProvider {
   }
 
   private mapFixture(match: Wc2026Match): ProviderFixture {
+    const reversed = this.isReversed(match);
+
     return {
       externalMatchId: String(match.id),
       matchId: String(match.id),
-      homeTeam: {
-        id: match.home_team_code,
-        name: match.home_team,
-      },
-      awayTeam: {
-        id: match.away_team_code,
-        name: match.away_team,
-      },
+      homeTeam: reversed
+        ? { id: match.away_team_code, name: match.away_team }
+        : { id: match.home_team_code, name: match.home_team },
+      awayTeam: reversed
+        ? { id: match.home_team_code, name: match.home_team }
+        : { id: match.away_team_code, name: match.away_team },
       kickoffAt: match.kickoff_utc,
       status: mapStatus(match.status),
       stage: match.round === "group" ? "group_stage" : "knockout",
@@ -112,16 +112,17 @@ export class Wc2026Provider implements LiveDataProvider {
   }
 
   private mapSnapshot(match: Wc2026Match): ProviderMatchSnapshot {
-    const penaltyScore = mapPenaltyScore(match);
-    const winnerTeam = inferWinnerTeam(match, penaltyScore);
+    const reversed = this.isReversed(match);
+    const penaltyScore = mapPenaltyScore(match, reversed);
+    const winnerTeam = inferWinnerTeam(match, penaltyScore, reversed);
 
     return {
       ...this.mapFixture(match),
       minute: match.match_minute ?? null,
       period: mapPeriod(match.phase, match.status),
       score: {
-        home: match.home_score ?? 0,
-        away: match.away_score ?? 0,
+        home: reversed ? match.away_score ?? 0 : match.home_score ?? 0,
+        away: reversed ? match.home_score ?? 0 : match.away_score ?? 0,
       },
       penaltyScore,
       winnerTeam,
@@ -129,6 +130,10 @@ export class Wc2026Provider implements LiveDataProvider {
       occurredAt: new Date().toISOString(),
       raw: match,
     };
+  }
+
+  private isReversed(match: Wc2026Match): boolean {
+    return this.config.wc2026ReversedMatchIds.has(String(match.id));
   }
 }
 
@@ -167,18 +172,25 @@ function mapPeriod(phase: string | undefined, status: string): MatchPeriod {
   }
 }
 
-function mapPenaltyScore(match: Wc2026Match): { home: number; away: number } | undefined {
+function mapPenaltyScore(match: Wc2026Match, reversed: boolean): { home: number; away: number } | undefined {
   if (typeof match.home_pen !== "number" || typeof match.away_pen !== "number") {
     return undefined;
   }
 
   return {
-    home: match.home_pen,
-    away: match.away_pen,
+    home: reversed ? match.away_pen : match.home_pen,
+    away: reversed ? match.home_pen : match.away_pen,
   };
 }
 
-function inferWinnerTeam(match: Wc2026Match, penaltyScore: { home: number; away: number } | undefined) {
+function inferWinnerTeam(match: Wc2026Match, penaltyScore: { home: number; away: number } | undefined, reversed: boolean) {
+  const homeTeam = reversed
+    ? { id: match.away_team_code, name: match.away_team }
+    : { id: match.home_team_code, name: match.home_team };
+  const awayTeam = reversed
+    ? { id: match.home_team_code, name: match.home_team }
+    : { id: match.away_team_code, name: match.away_team };
+
   if (
     match.round === "group" ||
     !penaltyScore ||
@@ -190,11 +202,11 @@ function inferWinnerTeam(match: Wc2026Match, penaltyScore: { home: number; away:
   }
 
   if (penaltyScore.home > penaltyScore.away) {
-    return { id: match.home_team_code, name: match.home_team };
+    return homeTeam;
   }
 
   if (penaltyScore.away > penaltyScore.home) {
-    return { id: match.away_team_code, name: match.away_team };
+    return awayTeam;
   }
 
   return undefined;

@@ -141,6 +141,54 @@ describe("Wc2026Provider", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("swaps configured reversed matches to match World Predicup home-away order", async () => {
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async () => new Response(JSON.stringify([
+      {
+        id: 67,
+        match_number: 67,
+        round: "group",
+        group_name: "L",
+        home_team_id: 1,
+        home_team: "Panama",
+        home_team_code: "PAN",
+        away_team_id: 2,
+        away_team: "Croatia",
+        away_team_code: "CRO",
+        kickoff_utc: "2026-06-27T21:00:00.000Z",
+        home_score: 1,
+        away_score: 2,
+        home_pen: null,
+        away_pen: null,
+        status: "live",
+        phase: "2H",
+      },
+    ]), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    try {
+      const provider = new Wc2026Provider(loadConfig({
+        SPORTS_DATA_PROVIDER: "wc2026",
+        SPORTS_DATA_API_KEY: "test-key",
+        WC2026_REVERSED_MATCH_IDS: "67",
+      }));
+
+      const [snapshot] = await provider.getAllMatches();
+
+      expect(snapshot).toMatchObject({
+        externalMatchId: "67",
+        homeTeam: { id: "CRO", name: "Croatia" },
+        awayTeam: { id: "PAN", name: "Panama" },
+        score: { home: 2, away: 1 },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 const groupASample = [

@@ -10,6 +10,7 @@
     "trigger:deploy": "npx trigger.dev@latest deploy",
     "probe:api-football": "tsx src/probe-api-football.ts",
     "probe:wc2026": "tsx src/probe-wc2026.ts",
+    "generate:wc2026-schedule": "tsx src/generate-wc2026-schedule.ts",
     "sync:wc2026-mappings": "tsx src/sync-wc2026-mappings.ts",
     "simulate:match": "tsx src/local-match-simulator.ts",
     "test:local:webhook": "tsx src/local-webhook-smoke.ts",

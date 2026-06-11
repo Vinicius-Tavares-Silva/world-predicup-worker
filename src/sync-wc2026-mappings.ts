@@ -7,12 +7,12 @@ type Wc2026Match = {
   round: string;
   group_name: string | null;
   home_team_id: number;
-  home_team: string;
+  home_team: string | null;
   home_team_code: string;
   away_team_id: number;
-  away_team: string;
+  away_team: string | null;
   away_team_code: string;
-  kickoff_utc: string;
+  kickoff_utc: string | null;
   home_score: number | null;
   away_score: number | null;
   home_pen: number | null;
@@ -65,15 +65,16 @@ async function main(): Promise<void> {
   const matched: MatchedMapping[] = [];
   const unmatched: UnmatchedProviderMatch[] = [];
   const ambiguous: UnmatchedProviderMatch[] = [];
+  const skipped: UnmatchedProviderMatch[] = [];
 
   for (const match of providerMatches) {
     const externalMatchId = String(match.id);
-    const homeTeam = match.home_team.trim();
-    const awayTeam = match.away_team.trim();
-    const kickoffAt = match.kickoff_utc;
+    const homeTeam = match.home_team?.trim() ?? "";
+    const awayTeam = match.away_team?.trim() ?? "";
+    const kickoffAt = match.kickoff_utc ?? "";
 
     if (!homeTeam || !awayTeam || !kickoffAt) {
-      unmatched.push({ externalMatchId, homeTeam, awayTeam, kickoffAt, reason: "missing provider team/date fields" });
+      skipped.push({ externalMatchId, homeTeam, awayTeam, kickoffAt, reason: "missing provider team/date fields" });
       continue;
     }
 
@@ -96,7 +97,12 @@ async function main(): Promise<void> {
     }
 
     if (reversedMatches.length === 1) {
-      matched.push(toMapping(match, reversedMatches[0], true));
+      if (config.wc2026ReversedMatchIds.has(externalMatchId)) {
+        matched.push(toMapping(match, reversedMatches[0], true));
+        continue;
+      }
+
+      ambiguous.push({ externalMatchId, homeTeam, awayTeam, kickoffAt, reason: "provider team order differs from app match" });
       continue;
     }
 
@@ -112,7 +118,7 @@ async function main(): Promise<void> {
     await upsertMappings(matched);
   }
 
-  printSummary({ fetched: providerMatches.length, matched, unmatched, ambiguous });
+  printSummary({ fetched: providerMatches.length, matched, unmatched, ambiguous, skipped });
 
   if (unmatched.length > 0 || ambiguous.length > 0) {
     process.exitCode = 1;
@@ -200,7 +206,7 @@ function toMapping(match: Wc2026Match, appMatch: WorldPredicupMatch, reversed: b
     providerAway: match.away_team ?? "",
     appHome: appMatch.home_team?.name ?? "",
     appAway: appMatch.away_team?.name ?? "",
-    kickoffAt: match.kickoff_utc,
+    kickoffAt: match.kickoff_utc ?? "",
     reversed,
   };
 }
@@ -249,12 +255,14 @@ function printSummary(input: {
   matched: MatchedMapping[];
   unmatched: UnmatchedProviderMatch[];
   ambiguous: UnmatchedProviderMatch[];
+  skipped: UnmatchedProviderMatch[];
 }): void {
   const reversed = input.matched.filter((match) => match.reversed);
   console.log(`WC2026 matches fetched: ${input.fetched}`);
   console.log(`Mappings matched: ${input.matched.length}`);
   console.log(`Mappings written: ${shouldWrite ? input.matched.length : 0}`);
   console.log(`Reversed team-order matches: ${reversed.length}`);
+  console.log(`Skipped placeholders: ${input.skipped.length}`);
   console.log(`Unmatched: ${input.unmatched.length}`);
   console.log(`Ambiguous: ${input.ambiguous.length}`);
 
@@ -269,6 +277,13 @@ function printSummary(input: {
     console.log("\nUnmatched provider matches:");
     for (const match of input.unmatched) {
       console.log(`- ${match.externalMatchId} ${match.kickoffAt} ${match.homeTeam} vs ${match.awayTeam}: ${match.reason}`);
+    }
+  }
+
+  if (input.skipped.length > 0) {
+    console.log("\nSkipped provider placeholder matches:");
+    for (const match of input.skipped) {
+      console.log(`- ${match.externalMatchId} ${match.kickoffAt} ${match.homeTeam || "TBD"} vs ${match.awayTeam || "TBD"}: ${match.reason}`);
     }
   }
 
@@ -340,6 +355,7 @@ const teamAliases = new Map<string, string>([
   ["tchequia", "Tchéquia"],
   ["dr congo", "RD Congo"],
   ["d r congo", "RD Congo"],
+  ["congo dr", "RD Congo"],
   ["democratic republic of congo", "RD Congo"],
   ["rd congo", "RD Congo"],
   ["ecuador", "Equador"],
@@ -356,6 +372,7 @@ const teamAliases = new Map<string, string>([
   ["gana", "Gana"],
   ["haiti", "Haiti"],
   ["iran", "Irã"],
+  ["ir iran", "Irã"],
   ["ira", "Irã"],
   ["iraq", "Iraque"],
   ["iraque", "Iraque"],

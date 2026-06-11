@@ -13,4 +13,13 @@ describe("loadConfig", () => {
   it("rejects unsupported providers", () => {
     expect(() => loadConfig({ SPORTS_DATA_PROVIDER: "unknown" })).toThrow("Unsupported SPORTS_DATA_PROVIDER");
   });
+
+  it("parses explicitly reversed WC2026 match IDs", () => {
+    const config = loadConfig({
+      WC2026_REVERSED_MATCH_IDS: "67, 99",
+    });
+
+    expect(config.wc2026ReversedMatchIds.has("67")).toBe(true);
+    expect(config.wc2026ReversedMatchIds.has("99")).toBe(true);
+  });
 });

@@ -9,6 +9,8 @@ describe("sync-wc2026-mappings helpers", () => {
     expect(teamKey("Korea Republic")).toBe(teamKey("Coreia do Sul"));
     expect(teamKey("Czechia")).toBe(teamKey("Tchéquia"));
     expect(teamKey("DR Congo")).toBe(teamKey("RD Congo"));
+    expect(teamKey("Congo DR")).toBe(teamKey("RD Congo"));
+    expect(teamKey("IR Iran")).toBe(teamKey("Irã"));
   });
 
   it("indexes app matches by kickoff and normalized teams", () => {

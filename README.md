@@ -176,6 +176,7 @@ SPORTS_DATA_PROVIDER=wc2026
 SPORTS_DATA_API_KEY=your-wc2026-key
 WC2026_API_BASE_URL=https://api.wc2026api.com
 WC2026_SCHEDULE_PATH=./data/wc2026-matches.json
+WC2026_REVERSED_MATCH_IDS=67
 WC2026_USE_TEST_ENDPOINT=true
 DRY_RUN=true
 STATE_DB_PATH=/tmp/worker.sqlite
@@ -217,6 +218,15 @@ GET /matches
 One aggregate live request should cover all currently live World Cup matches, including days where two matches happen at the same time. The budget must be based on active time windows, not the number of simultaneous games. Group-stage windows are intentionally short: kickoff - 10 minutes through kickoff + 120 minutes. Knockout windows remain longer: kickoff - 30 minutes through kickoff + 210 minutes.
 
 For production, generate `WC2026_SCHEDULE_PATH` from `GET https://api.wc2026api.com/matches`. The artifact can be the raw `/matches` JSON array; the worker reads `kickoff_utc` and `round` to build polling windows without calling the provider outside active windows.
+
+Run this in the worker repo before deploying Trigger.dev:
+
+```bash
+SPORTS_DATA_API_KEY='<wc2026-api-key>' npm run generate:wc2026-schedule
+npm run trigger:deploy
+```
+
+The generated `data/wc2026-matches.json` is included in the Trigger.dev deployment by `trigger.config.ts`.
 
 ### Budget Targets
 

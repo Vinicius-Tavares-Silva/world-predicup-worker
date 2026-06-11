@@ -10,6 +10,7 @@ export interface WorkerConfig {
   wc2026BaseUrl: string;
   wc2026UseTestEndpoint: boolean;
   wc2026SchedulePath?: string;
+  wc2026ReversedMatchIds: Set<string>;
   pollIntervalLiveSeconds: number;
   pollIntervalPreMatchSeconds: number;
   stateDbPath: string;
@@ -33,6 +34,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     wc2026BaseUrl: readString(env, "WC2026_API_BASE_URL", "https://api.wc2026api.com"),
     wc2026UseTestEndpoint: parseBoolean(env.WC2026_USE_TEST_ENDPOINT, false),
     wc2026SchedulePath: readOptionalString(env, "WC2026_SCHEDULE_PATH"),
+    wc2026ReversedMatchIds: parseStringSet(env.WC2026_REVERSED_MATCH_IDS),
     pollIntervalLiveSeconds: readPositiveInteger(env, "POLL_INTERVAL_LIVE_SECONDS", 60),
     pollIntervalPreMatchSeconds: readPositiveInteger(env, "POLL_INTERVAL_PRE_MATCH_SECONDS", 300),
     stateDbPath: readString(env, "STATE_DB_PATH", "./data/worker.sqlite"),
@@ -83,6 +85,15 @@ function readPositiveInteger(env: NodeJS.ProcessEnv, key: string, fallback: numb
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined || value.trim() === "") return fallback;
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function parseStringSet(value: string | undefined): Set<string> {
+  return new Set(
+    (value ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
 }
 
 function assertUrl(value: string, key: string): void {
