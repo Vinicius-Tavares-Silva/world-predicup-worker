@@ -39,7 +39,7 @@ describe("decideMatchPolling", () => {
       shouldPoll: true,
       activeWindow: {
         startsAt: "2026-06-11T18:50:00.000Z",
-        endsAt: "2026-06-11T21:00:00.000Z",
+        endsAt: "2026-06-11T21:10:00.000Z",
       },
     });
   });

@@ -203,8 +203,7 @@ Trigger runs every 5 minutes
 -> check the known tournament schedule
 -> decide if this minute is inside an active polling window
 -> if no, exit with reason: no_live_match
--> if group-stage window, call the live endpoint once
--> if knockout window, call live plus completed reconciliation
+-> if active match window, call live plus completed reconciliation
 -> normalize returned matches and send webhook updates
 ```
 
@@ -215,7 +214,7 @@ GET /matches?status=live
 GET /matches
 ```
 
-One aggregate live request should cover all currently live World Cup matches, including days where two matches happen at the same time. The budget must be based on active time windows, not the number of simultaneous games. Group-stage windows are intentionally short: kickoff - 10 minutes through kickoff + 120 minutes. Knockout windows remain longer: kickoff - 30 minutes through kickoff + 210 minutes.
+One aggregate live request should cover all currently live World Cup matches, including days where two matches happen at the same time. The budget must be based on active time windows, not the number of simultaneous games. Group-stage windows are intentionally short: kickoff - 10 minutes through kickoff + 130 minutes, giving the 10-minute Trigger cadence one post-regulation reconciliation poll. Knockout windows remain longer: kickoff - 30 minutes through kickoff + 210 minutes.
 
 For production, generate `WC2026_SCHEDULE_PATH` from `GET https://api.wc2026api.com/matches`. The artifact can be the raw `/matches` JSON array; the worker reads `kickoff_utc` and `round` to build polling windows without calling the provider outside active windows.
 
@@ -234,7 +233,7 @@ For a 100-request/day free tier, group-stage polling uses the shorter window and
 
 ```text
 Worst group day: 5 matches
-Window policy:   kickoff - 10m through kickoff + 120m
+Window policy:   kickoff - 10m through kickoff + 130m
 Cadence:         5 minutes
 Provider calls:  1 live request per execution
 Worst usage:     about 132 requests
@@ -285,8 +284,8 @@ Build windows from the known World Cup schedule:
 type MatchWindow = {
   matchId: string;
   kickoffAt: string;
-  startsAt: string; // kickoff - 30 minutes
-  endsAt: string;   // group: kickoff + 150m, knockout: kickoff + 210m
+  startsAt: string; // group: kickoff - 10m, knockout: kickoff - 30m
+  endsAt: string;   // group: kickoff + 130m, knockout: kickoff + 210m
 };
 
 type MergedPollingWindow = {
@@ -561,7 +560,7 @@ The worker should load the known FIFA schedule before each match day, group matc
 ```ts
 type PollingWindow = {
   startsAt: string; // group: kickoff - 10m, knockout: kickoff - 30m
-  endsAt: string;   // group: kickoff + 120m, knockout: kickoff + 210m
+  endsAt: string;   // group: kickoff + 130m, knockout: kickoff + 210m
   matchIds: string[];
   requestIntervalSeconds: number;
 };

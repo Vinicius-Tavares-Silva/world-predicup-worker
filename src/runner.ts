@@ -75,9 +75,7 @@ export async function runWorkerOnce(options: RunWorkerOnceOptions): Promise<RunW
     });
     const [liveMatches, completedMatches] = await Promise.all([
       options.provider.getLiveMatches(),
-      decision.activeWindow.stage === "knockout"
-        ? options.provider.getRecentlyCompletedMatches(decision.activeWindow)
-        : Promise.resolve([]),
+      options.provider.getRecentlyCompletedMatches(decision.activeWindow),
     ]);
     const snapshots = mergeSnapshots(liveMatches, completedMatches);
     logger.info("Provider live match fetch completed", {

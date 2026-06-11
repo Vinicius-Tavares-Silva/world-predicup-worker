@@ -84,7 +84,7 @@ export function decideMatchPolling(
 ): MatchPollingDecision {
   const groupBeforeMs = (options.groupBeforeMinutes ?? options.beforeMinutes ?? 10) * 60_000;
   const knockoutBeforeMs = (options.knockoutBeforeMinutes ?? options.beforeMinutes ?? 30) * 60_000;
-  const groupAfterMs = (options.groupAfterMinutes ?? 120) * 60_000;
+  const groupAfterMs = (options.groupAfterMinutes ?? 130) * 60_000;
   const knockoutAfterMs = (options.knockoutAfterMinutes ?? 210) * 60_000;
   const nowMs = now.getTime();
   const durations = { groupBeforeMs, knockoutBeforeMs, groupAfterMs, knockoutAfterMs };
