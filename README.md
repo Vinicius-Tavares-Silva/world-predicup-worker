@@ -175,6 +175,7 @@ Set these environment variables in Trigger.dev production:
 SPORTS_DATA_PROVIDER=wc2026
 SPORTS_DATA_API_KEY=your-wc2026-key
 WC2026_API_BASE_URL=https://api.wc2026api.com
+WC2026_SCHEDULE_PATH=./data/wc2026-matches.json
 WC2026_USE_TEST_ENDPOINT=true
 DRY_RUN=true
 STATE_DB_PATH=/tmp/worker.sqlite
@@ -183,9 +184,9 @@ STATE_DB_PATH=/tmp/worker.sqlite
 For real webhook delivery, change `DRY_RUN=false` and set:
 
 ```env
-WORLD_PREDICUP_API_BASE_URL=https://your-api-base-url
+WORLD_PREDICUP_API_BASE_URL=https://<project-ref>.supabase.co
 WORLD_PREDICUP_WEBHOOK_TOKEN=your-webhook-token
-WORLD_PREDICUP_WEBHOOK_PATH=/world-predicup/live-match-webhook
+WORLD_PREDICUP_WEBHOOK_PATH=/functions/v1/live-match-webhook
 ```
 
 Trigger.dev does not use the local SQLite state store for scheduled runs. It still sends the stable `Idempotency-Key` header, so the receiving API should dedupe repeated score snapshots.
@@ -201,7 +202,9 @@ Trigger runs every 5 minutes
 -> check the known tournament schedule
 -> decide if this minute is inside an active polling window
 -> if no, exit with reason: no_live_match
--> if yes, call provider once, normalize all returned live matches, send webhook updates
+-> if group-stage window, call the live endpoint once
+-> if knockout window, call live plus completed reconciliation
+-> normalize returned matches and send webhook updates
 ```
 
 For WC2026 API, prefer aggregate requests:
@@ -211,20 +214,23 @@ GET /matches?status=live
 GET /matches
 ```
 
-One aggregate live request should cover all currently live World Cup matches, including days where two matches happen at the same time. The budget must be based on active time windows, not the number of simultaneous games.
+One aggregate live request should cover all currently live World Cup matches, including days where two matches happen at the same time. The budget must be based on active time windows, not the number of simultaneous games. Group-stage windows are intentionally short: kickoff - 10 minutes through kickoff + 120 minutes. Knockout windows remain longer: kickoff - 30 minutes through kickoff + 210 minutes.
+
+For production, generate `WC2026_SCHEDULE_PATH` from `GET https://api.wc2026api.com/matches`. The artifact can be the raw `/matches` JSON array; the worker reads `kickoff_utc` and `round` to build polling windows without calling the provider outside active windows.
 
 ### Budget Targets
 
-For a 100-request/day free tier, reserve requests before allocating live polling:
+For a 100-request/day free tier, group-stage polling uses the shorter window and a 5-minute cadence:
 
 ```text
-Daily hard limit:                 100 requests
-Fixture/schedule refresh:           2 requests
-Pre-match window checks:            8 requests
-Post-match reconciliation:         10 requests
-Retry/manual buffer:               20 requests
-Available live requests:           60 requests
+Worst group day: 5 matches
+Window policy:   kickoff - 10m through kickoff + 120m
+Cadence:         5 minutes
+Provider calls:  1 live request per execution
+Worst usage:     about 132 requests
 ```
+
+That can exceed the 100/day free limit on the busiest group days. If the provider limit is strict, switch the Trigger schedule to 10 minutes during the group phase; the same policy drops the worst group day to about 68 requests.
 
 On match days, compute the interval from the schedule:
 
@@ -380,7 +386,7 @@ The worker should avoid relying on Google page scraping as the production source
 For now, the worker will send live updates to a mock World Predicup endpoint:
 
 ```http
-POST /world-predicup/live-match-webhook
+POST /functions/v1/live-match-webhook
 Authorization: Bearer <WORLD_PREDICUP_WEBHOOK_TOKEN>
 Content-Type: application/json
 Idempotency-Key: <stable-update-key>
@@ -389,7 +395,7 @@ Idempotency-Key: <stable-update-key>
 Recommended environment variables:
 
 ```env
-WORLD_PREDICUP_API_BASE_URL=https://api.example.com
+WORLD_PREDICUP_API_BASE_URL=https://<project-ref>.supabase.co
 WORLD_PREDICUP_WEBHOOK_TOKEN=replace-me
 SPORTS_DATA_PROVIDER=api-football
 SPORTS_DATA_API_KEY=replace-me
@@ -466,7 +472,7 @@ For simplicity, the first implementation can send snapshots with an embedded `ev
 6. Generate idempotency keys:
    - snapshots: `snapshot:<provider>:<externalMatchId>:<minute>:<homeScore>:<awayScore>:<status>`
    - events: `event:<provider>:<externalMatchId>:<externalEventId>`
-7. Send updates to `/world-predicup/live-match-webhook`.
+7. Send updates to `/functions/v1/live-match-webhook`.
 8. Retry failed requests with exponential backoff.
 9. Persist sent updates so restarts do not resend old events incorrectly.
 
@@ -544,8 +550,8 @@ The worker should load the known FIFA schedule before each match day, group matc
 
 ```ts
 type PollingWindow = {
-  startsAt: string; // kickoff - 30 minutes
-  endsAt: string;   // group: kickoff + 150m, knockout: kickoff + 210m
+  startsAt: string; // group: kickoff - 10m, knockout: kickoff - 30m
+  endsAt: string;   // group: kickoff + 120m, knockout: kickoff + 210m
   matchIds: string[];
   requestIntervalSeconds: number;
 };
@@ -561,11 +567,12 @@ interval_minutes = ceil(total_window_minutes / available_live_requests)
 
 For a 100-request free tier, this means the realistic product experience is:
 
-- predictable score refreshes every 5-10 minutes when using aggregate endpoints
+- predictable score refreshes every 5 minutes if quota can be increased or occasional overages are acceptable
+- switchable 10-minute group polling when staying strictly under 100 requests/day
 - slower updates when only per-match endpoints are available
 - not true minute-by-minute live coverage unless the provider offers a much higher free limit
 
-Recommended implementation for a 100-request/day free tier:
+Recommended implementation for strict 100-request/day API-Football usage:
 
 ```text
 Primary candidate: API-Football
@@ -684,7 +691,9 @@ The scraper should emit the same normalized payload as an API provider:
 interface LiveDataProvider {
   name: string;
   getFixtures(): Promise<ProviderFixture[]>;
-  getLiveMatches(): Promise<ProviderLiveMatch[]>;
+  getAllMatches(): Promise<ProviderMatchSnapshot[]>;
+  getLiveMatches(): Promise<ProviderMatchSnapshot[]>;
+  getRecentlyCompletedMatches(window): Promise<ProviderMatchSnapshot[]>;
   getMatchSnapshot(externalMatchId: string): Promise<ProviderMatchSnapshot>;
   getMatchEvents(externalMatchId: string): Promise<ProviderMatchEvent[]>;
 }
@@ -765,13 +774,13 @@ Task: sync-world-cup-fixtures
 Schedule: once per day
 
 Task: poll-live-world-cup-matches
-Schedule: every 10 minutes during tournament days
+Schedule: every 5 minutes during tournament days
 
 Task: reconcile-finished-matches
-Schedule: every 30 minutes during tournament days
+Schedule: built into knockout polling
 ```
 
-The 10-minute polling task should check the known FIFA schedule and only call the sports data provider if a match window is active. This avoids wasting API requests overnight or between match windows.
+The 5-minute polling task should check the known FIFA schedule and only call the sports data provider if a match window is active. This avoids wasting API requests overnight or between match windows.
 
 ### Alternative: Cloudflare Workers Cron Triggers
 
@@ -900,8 +909,8 @@ Required decisions and setup:
 2. Confirm the World Predicup webhook configuration.
 
 ```env
-WORLD_PREDICUP_API_BASE_URL=https://your-api.com
-WORLD_PREDICUP_WEBHOOK_PATH=/world-predicup/live-match-webhook
+WORLD_PREDICUP_API_BASE_URL=https://<project-ref>.supabase.co
+WORLD_PREDICUP_WEBHOOK_PATH=/functions/v1/live-match-webhook
 WORLD_PREDICUP_WEBHOOK_TOKEN=secret-token
 ```
 
@@ -912,9 +921,9 @@ Authorization: Bearer <WORLD_PREDICUP_WEBHOOK_TOKEN>
 ```
 
 3. Use Trigger.dev as the v1 runtime.
-   - Scheduled polling task every 10 minutes.
+   - Scheduled polling task every 5 minutes.
    - Daily fixture sync task.
-   - Post-match reconciliation task.
+   - Knockout reconciliation inside the polling task.
    - Built-in retries, logs, and alerts.
 
 4. Choose persistent storage for idempotency and match mappings.
@@ -967,10 +976,10 @@ Minimal v1 scope:
 
 ```text
 1. TypeScript project
-2. Trigger.dev scheduled task every 10 minutes
+2. Trigger.dev scheduled task every 5 minutes
 3. API-Football adapter using /fixtures?live=all
 4. Normalize score, status, minute, teams, and match events
-5. Send payload to /world-predicup/live-match-webhook
+5. Send payload to /functions/v1/live-match-webhook
 6. Store idempotency keys in Postgres
 7. Add basic logs and retry behavior
 ```

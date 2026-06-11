@@ -4,6 +4,7 @@ import { createProvider } from "../provider.js";
 import { runWorkerOnce } from "../runner.js";
 import { MemoryStateStore } from "../state/memory-state-store.js";
 import { WebhookClient } from "../webhook-client.js";
+import { loadWc2026ScheduleArtifact } from "../wc2026-schedule-artifact.js";
 
 const triggerLogger = {
   info(message: string, properties?: Record<string, unknown>): void {
@@ -24,11 +25,15 @@ export const pollLiveWorldCupMatches = schedules.task({
     });
 
     const config = loadConfig();
+    const schedule = config.wc2026SchedulePath
+      ? loadWc2026ScheduleArtifact(config.wc2026SchedulePath)
+      : undefined;
     const result = await runWorkerOnce({
       provider: createProvider(config),
       stateStore: new MemoryStateStore(),
       webhookClient: new WebhookClient(config),
       now: payload.timestamp,
+      schedule,
       logger: triggerLogger,
     });
 

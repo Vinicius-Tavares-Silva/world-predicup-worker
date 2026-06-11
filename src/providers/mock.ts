@@ -11,6 +11,15 @@ export class MockLiveDataProvider implements LiveDataProvider {
     return [this.buildSnapshot()];
   }
 
+  async getAllMatches(): Promise<ProviderMatchSnapshot[]> {
+    return [this.buildSnapshot()];
+  }
+
+  async getRecentlyCompletedMatches(): Promise<ProviderMatchSnapshot[]> {
+    const snapshot = this.buildSnapshot();
+    return snapshot.status === "finished" ? [snapshot] : [];
+  }
+
   async getMatchSnapshot(externalMatchId: string): Promise<ProviderMatchSnapshot> {
     const fixture = mockFixture();
     if (externalMatchId !== fixture.externalMatchId) {

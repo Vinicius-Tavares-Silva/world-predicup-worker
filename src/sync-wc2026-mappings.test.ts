@@ -6,6 +6,7 @@ describe("sync-wc2026-mappings helpers", () => {
     expect(teamKey("Mexico")).toBe(teamKey("México"));
     expect(teamKey("South Africa")).toBe(teamKey("África do Sul"));
     expect(teamKey("South Korea")).toBe(teamKey("Coreia do Sul"));
+    expect(teamKey("Korea Republic")).toBe(teamKey("Coreia do Sul"));
     expect(teamKey("Czechia")).toBe(teamKey("Tchéquia"));
     expect(teamKey("DR Congo")).toBe(teamKey("RD Congo"));
   });

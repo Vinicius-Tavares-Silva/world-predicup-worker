@@ -2,11 +2,23 @@ import { loadConfig } from "./config.js";
 import { loadEnvFiles } from "./env-file.js";
 
 type Wc2026Match = {
-  id: number | string;
-  home_team?: string;
-  away_team?: string;
-  kickoff_utc?: string;
-  date?: string;
+  id: number;
+  match_number: number;
+  round: string;
+  group_name: string | null;
+  home_team_id: number;
+  home_team: string;
+  home_team_code: string;
+  away_team_id: number;
+  away_team: string;
+  away_team_code: string;
+  kickoff_utc: string;
+  home_score: number | null;
+  away_score: number | null;
+  home_pen: number | null;
+  away_pen: number | null;
+  status: "scheduled" | "live" | "completed" | string;
+  phase: "PRE" | "1H" | "HT" | "2H" | "ET1" | "ET2" | "PEN" | "FT_PEN" | string;
 };
 
 type WorldPredicupMatch = {
@@ -56,9 +68,9 @@ async function main(): Promise<void> {
 
   for (const match of providerMatches) {
     const externalMatchId = String(match.id);
-    const homeTeam = match.home_team?.trim() ?? "";
-    const awayTeam = match.away_team?.trim() ?? "";
-    const kickoffAt = match.kickoff_utc ?? match.date ?? "";
+    const homeTeam = match.home_team.trim();
+    const awayTeam = match.away_team.trim();
+    const kickoffAt = match.kickoff_utc;
 
     if (!homeTeam || !awayTeam || !kickoffAt) {
       unmatched.push({ externalMatchId, homeTeam, awayTeam, kickoffAt, reason: "missing provider team/date fields" });
@@ -188,7 +200,7 @@ function toMapping(match: Wc2026Match, appMatch: WorldPredicupMatch, reversed: b
     providerAway: match.away_team ?? "",
     appHome: appMatch.home_team?.name ?? "",
     appAway: appMatch.away_team?.name ?? "",
-    kickoffAt: match.kickoff_utc ?? match.date ?? "",
+    kickoffAt: match.kickoff_utc,
     reversed,
   };
 }
@@ -240,7 +252,8 @@ function printSummary(input: {
 }): void {
   const reversed = input.matched.filter((match) => match.reversed);
   console.log(`WC2026 matches fetched: ${input.fetched}`);
-  console.log(`Mappings ${shouldWrite ? "upserted" : "matched dry-run"}: ${input.matched.length}`);
+  console.log(`Mappings matched: ${input.matched.length}`);
+  console.log(`Mappings written: ${shouldWrite ? input.matched.length : 0}`);
   console.log(`Reversed team-order matches: ${reversed.length}`);
   console.log(`Unmatched: ${input.unmatched.length}`);
   console.log(`Ambiguous: ${input.ambiguous.length}`);

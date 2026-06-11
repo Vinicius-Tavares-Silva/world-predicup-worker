@@ -12,6 +12,8 @@ export function normalizeSnapshot(source: string, snapshot: ProviderMatchSnapsho
     homeTeam: snapshot.homeTeam,
     awayTeam: snapshot.awayTeam,
     score: snapshot.score,
+    penaltyScore: snapshot.penaltyScore,
+    winnerTeam: snapshot.winnerTeam,
     events: snapshot.events,
     occurredAt: snapshot.occurredAt,
     receivedAt: receivedAt.toISOString(),

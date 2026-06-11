@@ -101,6 +101,25 @@ export class ApiFootballProvider implements LiveDataProvider {
       .map((fixture) => this.mapSnapshot(fixture));
   }
 
+  async getAllMatches(): Promise<ProviderMatchSnapshot[]> {
+    const fixtures = await this.get<ApiFootballFixture>("/fixtures", {
+      league: String(this.config.apiFootballLeagueId),
+      season: String(this.config.apiFootballSeason),
+    });
+
+    return fixtures.map((fixture) => this.mapSnapshot(fixture));
+  }
+
+  async getRecentlyCompletedMatches(window: { startsAt: string; endsAt: string }): Promise<ProviderMatchSnapshot[]> {
+    const startsAtMs = new Date(window.startsAt).getTime();
+    const endsAtMs = new Date(window.endsAt).getTime();
+
+    return (await this.getAllMatches()).filter((match) => {
+      const kickoffMs = new Date(match.kickoffAt).getTime();
+      return match.status === "finished" && kickoffMs >= startsAtMs && kickoffMs <= endsAtMs;
+    });
+  }
+
   async getMatchSnapshot(externalMatchId: string): Promise<ProviderMatchSnapshot> {
     const fixtures = await this.get<ApiFootballFixture>("/fixtures", {
       id: externalMatchId,

@@ -45,6 +45,7 @@ export interface ProviderFixture {
   awayTeam: TeamRef;
   kickoffAt: string;
   status: MatchStatus;
+  stage?: "group_stage" | "knockout";
 }
 
 export interface ProviderMatchEvent {
@@ -61,6 +62,8 @@ export interface ProviderMatchSnapshot extends ProviderFixture {
   minute: number | null;
   period: MatchPeriod;
   score: Score;
+  penaltyScore?: Score;
+  winnerTeam?: TeamRef;
   events: ProviderMatchEvent[];
   occurredAt: string;
   raw?: unknown;
@@ -69,7 +72,9 @@ export interface ProviderMatchSnapshot extends ProviderFixture {
 export interface LiveDataProvider {
   name: string;
   getFixtures(): Promise<ProviderFixture[]>;
+  getAllMatches(): Promise<ProviderMatchSnapshot[]>;
   getLiveMatches(): Promise<ProviderMatchSnapshot[]>;
+  getRecentlyCompletedMatches(window: { startsAt: string; endsAt: string }): Promise<ProviderMatchSnapshot[]>;
   getMatchSnapshot(externalMatchId: string): Promise<ProviderMatchSnapshot>;
   getMatchEvents(externalMatchId: string): Promise<ProviderMatchEvent[]>;
 }
@@ -85,6 +90,8 @@ export interface WebhookPayload {
   homeTeam: TeamRef;
   awayTeam: TeamRef;
   score: Score;
+  penaltyScore?: Score;
+  winnerTeam?: TeamRef;
   events: ProviderMatchEvent[];
   occurredAt: string;
   receivedAt: string;

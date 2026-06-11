@@ -23,6 +23,17 @@ describe("idempotency", () => {
     expect(snapshotIdempotencyKey(payload)).toBe("snapshot:mock:provider-match-123:67:2:1:live");
   });
 
+  it("includes penalty scores and winner team when present", () => {
+    expect(snapshotIdempotencyKey({
+      ...payload,
+      status: "finished",
+      minute: null,
+      score: { home: 1, away: 1 },
+      penaltyScore: { home: 4, away: 3 },
+      winnerTeam: { id: "BRA", name: "Brazil" },
+    })).toBe("snapshot:mock:provider-match-123:unknown:1:1:finished:pen:4:3:winner:BRA");
+  });
+
   it("builds stable event keys from provider event IDs", () => {
     expect(eventIdempotencyKey("mock", "provider-match-123", {
       externalEventId: "provider-event-999",

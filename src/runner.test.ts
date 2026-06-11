@@ -34,9 +34,10 @@ describe("runWorkerOnce scheduling gate", () => {
 
   it("calls the provider when a match window is active", async () => {
     const getLiveMatches = vi.fn(async () => []);
+    const getRecentlyCompletedMatches = vi.fn(async () => []);
 
     const result = await runWorkerOnce({
-      provider: fakeProvider(getLiveMatches),
+      provider: fakeProvider(getLiveMatches, getRecentlyCompletedMatches),
       stateStore: new MemoryStateStore(),
       webhookClient: fakeWebhookClient(),
       now: new Date("2026-06-11T19:00:00.000Z"),
@@ -51,6 +52,7 @@ describe("runWorkerOnce scheduling gate", () => {
       },
     });
     expect(getLiveMatches).toHaveBeenCalledOnce();
+    expect(getRecentlyCompletedMatches).not.toHaveBeenCalled();
   });
 
   it("sends one snapshot webhook per live match returned by the provider", async () => {
@@ -74,13 +76,78 @@ describe("runWorkerOnce scheduling gate", () => {
     expect(webhookClient.send).toHaveBeenCalledTimes(2);
     expect(webhookClient.send.mock.calls.map(([payload]) => payload.externalMatchId)).toEqual(["match-1", "match-2"]);
   });
+
+  it("reconciles completed matches after live polling", async () => {
+    const getLiveMatches = vi.fn(async () => []);
+    const completedSnapshot = {
+      ...fakeSnapshot("match-1", "BRA", "ARG"),
+      status: "finished" as const,
+      period: "full_time" as const,
+      minute: null,
+    };
+    const getRecentlyCompletedMatches = vi.fn(async () => [completedSnapshot]);
+    const webhookClient = fakeWebhookClient();
+
+    const result = await runWorkerOnce({
+      provider: fakeProvider(getLiveMatches, getRecentlyCompletedMatches),
+      stateStore: new MemoryStateStore(),
+      webhookClient,
+      now: new Date("2026-06-28T18:00:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      status: "polled",
+      liveMatchCount: 1,
+    });
+    expect(getLiveMatches).toHaveBeenCalledOnce();
+    expect(getRecentlyCompletedMatches).toHaveBeenCalledOnce();
+    expect(webhookClient.send).toHaveBeenCalledTimes(1);
+    expect(webhookClient.send.mock.calls[0][0]).toMatchObject({
+      externalMatchId: "match-1",
+      status: "finished",
+    });
+  });
+
+  it("prefers completed reconciliation snapshots over live snapshots for the same match", async () => {
+    const liveSnapshot = fakeSnapshot("match-1", "BRA", "ARG");
+    const completedSnapshot = {
+      ...liveSnapshot,
+      status: "finished" as const,
+      period: "full_time" as const,
+      score: { home: 3, away: 1 },
+      minute: null,
+    };
+    const webhookClient = fakeWebhookClient();
+
+    await runWorkerOnce({
+      provider: fakeProvider(
+        vi.fn(async () => [liveSnapshot]),
+        vi.fn(async () => [completedSnapshot]),
+      ),
+      stateStore: new MemoryStateStore(),
+      webhookClient,
+      now: new Date("2026-06-28T18:00:00.000Z"),
+    });
+
+    expect(webhookClient.send).toHaveBeenCalledTimes(1);
+    expect(webhookClient.send.mock.calls[0][0]).toMatchObject({
+      externalMatchId: "match-1",
+      status: "finished",
+      score: { home: 3, away: 1 },
+    });
+  });
 });
 
-function fakeProvider(getLiveMatches: LiveDataProvider["getLiveMatches"]): LiveDataProvider {
+function fakeProvider(
+  getLiveMatches: LiveDataProvider["getLiveMatches"],
+  getRecentlyCompletedMatches: LiveDataProvider["getRecentlyCompletedMatches"] = vi.fn(async () => []),
+): LiveDataProvider {
   return {
     name: "fake",
     getFixtures: async () => [],
+    getAllMatches: async () => [],
     getLiveMatches,
+    getRecentlyCompletedMatches,
     getMatchSnapshot: async () => {
       throw new Error("not implemented");
     },

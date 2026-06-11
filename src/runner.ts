@@ -1,7 +1,7 @@
 import { eventIdempotencyKey, payloadHash, snapshotIdempotencyKey } from "./idempotency.js";
-import { decideMatchPolling, type MatchPollingDecision } from "./match-schedule.js";
+import { decideMatchPolling, type MatchPollingDecision, type MatchScheduleEntry } from "./match-schedule.js";
 import { normalizeSnapshot } from "./normalizer.js";
-import type { LiveDataProvider, ProviderMatchEvent, WebhookPayload } from "./types.js";
+import type { LiveDataProvider, ProviderMatchEvent, ProviderMatchSnapshot, WebhookPayload } from "./types.js";
 import type { StateStore } from "./state/state-store.js";
 import { WebhookClient } from "./webhook-client.js";
 
@@ -15,6 +15,7 @@ export interface RunWorkerOnceOptions {
   stateStore: StateStore;
   webhookClient: WebhookClient;
   now?: Date;
+  schedule?: MatchScheduleEntry[];
   logger?: WorkerLogger;
 }
 
@@ -43,7 +44,7 @@ export async function runWorkerOnce(options: RunWorkerOnceOptions): Promise<RunW
       now: now.toISOString(),
     });
 
-    const decision = decideMatchPolling(now);
+    const decision = decideMatchPolling(now, { schedule: options.schedule });
     logger.info("Match polling window decision", {
       provider: options.provider.name,
       syncRunId: syncRun.id,
@@ -72,21 +73,29 @@ export async function runWorkerOnce(options: RunWorkerOnceOptions): Promise<RunW
       syncRunId: syncRun.id,
       activeWindow: decision.activeWindow,
     });
-    const liveMatches = await options.provider.getLiveMatches();
+    const [liveMatches, completedMatches] = await Promise.all([
+      options.provider.getLiveMatches(),
+      decision.activeWindow.stage === "knockout"
+        ? options.provider.getRecentlyCompletedMatches(decision.activeWindow)
+        : Promise.resolve([]),
+    ]);
+    const snapshots = mergeSnapshots(liveMatches, completedMatches);
     logger.info("Provider live match fetch completed", {
       provider: options.provider.name,
       syncRunId: syncRun.id,
       liveMatchCount: liveMatches.length,
+      completedMatchCount: completedMatches.length,
+      mergedMatchCount: snapshots.length,
     });
 
-    if (liveMatches.length === 0) {
-      logger.info("No live matches returned by provider", {
+    if (snapshots.length === 0) {
+      logger.info("No live or completed matches returned by provider", {
         provider: options.provider.name,
         syncRunId: syncRun.id,
       });
     }
 
-    for (const snapshot of liveMatches) {
+    for (const snapshot of snapshots) {
       logger.info("Processing live match snapshot", {
         provider: options.provider.name,
         syncRunId: syncRun.id,
@@ -118,12 +127,12 @@ export async function runWorkerOnce(options: RunWorkerOnceOptions): Promise<RunW
       provider: options.provider.name,
       syncRunId: syncRun.id,
       status: "polled",
-      liveMatchCount: liveMatches.length,
+      liveMatchCount: snapshots.length,
     });
     return {
       status: "polled",
       decision,
-      liveMatchCount: liveMatches.length,
+      liveMatchCount: snapshots.length,
       ranAt: now.toISOString(),
     };
   } catch (error) {
@@ -136,6 +145,23 @@ export async function runWorkerOnce(options: RunWorkerOnceOptions): Promise<RunW
     options.stateStore.finishSyncRun(syncRun.id, "failed", message);
     throw error;
   }
+}
+
+function mergeSnapshots(
+  liveMatches: ProviderMatchSnapshot[],
+  completedMatches: ProviderMatchSnapshot[],
+): ProviderMatchSnapshot[] {
+  const snapshots = new Map<string, ProviderMatchSnapshot>();
+
+  for (const snapshot of liveMatches) {
+    snapshots.set(snapshot.externalMatchId, snapshot);
+  }
+
+  for (const snapshot of completedMatches) {
+    snapshots.set(snapshot.externalMatchId, snapshot);
+  }
+
+  return [...snapshots.values()];
 }
 
 async function deliverPayload(

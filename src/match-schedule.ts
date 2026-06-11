@@ -1,3 +1,5 @@
+import type { ProviderFixture } from "./types.js";
+
 export type MatchPollingDecision =
   | {
       shouldPoll: true;
@@ -18,6 +20,19 @@ export type MatchPollingWindow = {
 };
 
 export type MatchScheduleStage = "group_stage" | "knockout";
+
+export type MatchScheduleEntry = {
+  externalMatchId?: string;
+  kickoffAt: string;
+  stage: MatchScheduleStage;
+};
+
+export type MatchWindowDurations = {
+  groupBeforeMs: number;
+  knockoutBeforeMs: number;
+  groupAfterMs: number;
+  knockoutAfterMs: number;
+};
 
 const groupStageKickoffs = [
   "2026-06-11T19:00:00Z", "2026-06-12T02:00:00Z", "2026-06-12T19:00:00Z",
@@ -58,13 +73,24 @@ const knockoutKickoffs = [
 
 export function decideMatchPolling(
   now = new Date(),
-  options: { beforeMinutes?: number; groupAfterMinutes?: number; knockoutAfterMinutes?: number } = {},
+  options: {
+    beforeMinutes?: number;
+    groupBeforeMinutes?: number;
+    knockoutBeforeMinutes?: number;
+    groupAfterMinutes?: number;
+    knockoutAfterMinutes?: number;
+    schedule?: MatchScheduleEntry[];
+  } = {},
 ): MatchPollingDecision {
-  const beforeMs = (options.beforeMinutes ?? 30) * 60_000;
-  const groupAfterMs = (options.groupAfterMinutes ?? 150) * 60_000;
+  const groupBeforeMs = (options.groupBeforeMinutes ?? options.beforeMinutes ?? 10) * 60_000;
+  const knockoutBeforeMs = (options.knockoutBeforeMinutes ?? options.beforeMinutes ?? 30) * 60_000;
+  const groupAfterMs = (options.groupAfterMinutes ?? 120) * 60_000;
   const knockoutAfterMs = (options.knockoutAfterMinutes ?? 210) * 60_000;
   const nowMs = now.getTime();
-  const windows = buildMatchPollingWindows(beforeMs, groupAfterMs, knockoutAfterMs);
+  const durations = { groupBeforeMs, knockoutBeforeMs, groupAfterMs, knockoutAfterMs };
+  const windows = options.schedule
+    ? buildMatchPollingWindowsFromScheduleWithDurations(options.schedule, durations)
+    : buildMatchPollingWindowsFromScheduleWithDurations(defaultMatchSchedule, durations);
 
   const activeWindow = windows.find((window) => {
     const startsAt = new Date(window.startsAt).getTime();
@@ -92,10 +118,59 @@ export function buildMatchPollingWindows(
   groupAfterMs: number,
   knockoutAfterMs: number,
 ): MatchPollingWindow[] {
-  const windows = [
-    ...groupStageKickoffs.map((kickoffAt) => buildWindow(kickoffAt, "group_stage", beforeMs, groupAfterMs)),
-    ...knockoutKickoffs.map((kickoffAt) => buildWindow(kickoffAt, "knockout", beforeMs, knockoutAfterMs)),
-  ];
+  return buildMatchPollingWindowsFromSchedule(defaultMatchSchedule, beforeMs, groupAfterMs, knockoutAfterMs);
+}
+
+export function buildMatchPollingWindowsWithDurations(
+  durations: MatchWindowDurations,
+): MatchPollingWindow[] {
+  return buildMatchPollingWindowsFromScheduleWithDurations(defaultMatchSchedule, durations);
+}
+
+export function buildMatchPollingWindowsFromFixtures(
+  fixtures: ProviderFixture[],
+  beforeMs: number,
+  groupAfterMs: number,
+  knockoutAfterMs: number,
+): MatchPollingWindow[] {
+  return buildMatchPollingWindowsFromSchedule(
+    fixtures.map((fixture) => ({
+      externalMatchId: fixture.externalMatchId,
+      kickoffAt: fixture.kickoffAt,
+      stage: fixture.stage ?? "group_stage",
+    })),
+    beforeMs,
+    groupAfterMs,
+    knockoutAfterMs,
+  );
+}
+
+export function buildMatchPollingWindowsFromSchedule(
+  schedule: MatchScheduleEntry[],
+  beforeMs: number,
+  groupAfterMs: number,
+  knockoutAfterMs: number,
+): MatchPollingWindow[] {
+  const windows = schedule.map((entry) => buildWindow(
+    entry.kickoffAt,
+    entry.stage,
+    beforeMs,
+    entry.stage === "group_stage" ? groupAfterMs : knockoutAfterMs,
+  ));
+
+  return windows.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+}
+
+export function buildMatchPollingWindowsFromScheduleWithDurations(
+  schedule: MatchScheduleEntry[],
+  durations: MatchWindowDurations,
+): MatchPollingWindow[] {
+  const windows = schedule.map((entry) => buildWindow(
+    entry.kickoffAt,
+    entry.stage,
+    entry.stage === "group_stage" ? durations.groupBeforeMs : durations.knockoutBeforeMs,
+    entry.stage === "group_stage" ? durations.groupAfterMs : durations.knockoutAfterMs,
+  ));
 
   return windows.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 }
@@ -114,3 +189,8 @@ function buildWindow(
       endsAt: new Date(kickoffMs + afterMs).toISOString(),
     };
 }
+
+const defaultMatchSchedule: MatchScheduleEntry[] = [
+  ...groupStageKickoffs.map((kickoffAt) => ({ kickoffAt, stage: "group_stage" as const })),
+  ...knockoutKickoffs.map((kickoffAt) => ({ kickoffAt, stage: "knockout" as const })),
+];

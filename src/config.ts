@@ -9,6 +9,7 @@ export interface WorkerConfig {
   apiFootballLiveScope: string;
   wc2026BaseUrl: string;
   wc2026UseTestEndpoint: boolean;
+  wc2026SchedulePath?: string;
   pollIntervalLiveSeconds: number;
   pollIntervalPreMatchSeconds: number;
   stateDbPath: string;
@@ -21,7 +22,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   const sportsDataProvider = readProvider(env.SPORTS_DATA_PROVIDER);
 
   const config: WorkerConfig = {
-    worldPredicupApiBaseUrl: readString(env, "WORLD_PREDICUP_API_BASE_URL", dryRun ? "http://localhost:54321/functions/v1" : undefined),
+    worldPredicupApiBaseUrl: readString(env, "WORLD_PREDICUP_API_BASE_URL", dryRun ? "http://localhost:54321" : undefined),
     worldPredicupWebhookToken: readString(env, "WORLD_PREDICUP_WEBHOOK_TOKEN", dryRun ? "dry-run-token" : undefined),
     sportsDataProvider,
     sportsDataApiKey: readString(env, "SPORTS_DATA_API_KEY", sportsDataProvider === "mock" ? "mock-key" : undefined),
@@ -31,11 +32,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     apiFootballLiveScope: readString(env, "API_FOOTBALL_LIVE_SCOPE", "1"),
     wc2026BaseUrl: readString(env, "WC2026_API_BASE_URL", "https://api.wc2026api.com"),
     wc2026UseTestEndpoint: parseBoolean(env.WC2026_USE_TEST_ENDPOINT, false),
+    wc2026SchedulePath: readOptionalString(env, "WC2026_SCHEDULE_PATH"),
     pollIntervalLiveSeconds: readPositiveInteger(env, "POLL_INTERVAL_LIVE_SECONDS", 60),
     pollIntervalPreMatchSeconds: readPositiveInteger(env, "POLL_INTERVAL_PRE_MATCH_SECONDS", 300),
     stateDbPath: readString(env, "STATE_DB_PATH", "./data/worker.sqlite"),
     dryRun,
-    webhookPath: readString(env, "WORLD_PREDICUP_WEBHOOK_PATH", "/world-predicup/live-match-webhook"),
+    webhookPath: readString(env, "WORLD_PREDICUP_WEBHOOK_PATH", "/functions/v1/live-match-webhook"),
   };
 
   if (!config.dryRun) {
@@ -59,6 +61,11 @@ function readString(env: NodeJS.ProcessEnv, key: string, fallback?: string): str
   if (value) return value;
   if (fallback !== undefined) return fallback;
   throw new Error(`Missing required environment variable: ${key}`);
+}
+
+function readOptionalString(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const value = env[key]?.trim();
+  return value || undefined;
 }
 
 function readPositiveInteger(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
