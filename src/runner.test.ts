@@ -32,7 +32,7 @@ describe("runWorkerOnce scheduling gate", () => {
     ]);
   });
 
-  it("calls the provider when a match window is active", async () => {
+  it("calls live provider only when a match window is active but not near the end", async () => {
     const getLiveMatches = vi.fn(async () => []);
     const getRecentlyCompletedMatches = vi.fn(async () => []);
 
@@ -52,7 +52,7 @@ describe("runWorkerOnce scheduling gate", () => {
       },
     });
     expect(getLiveMatches).toHaveBeenCalledOnce();
-    expect(getRecentlyCompletedMatches).toHaveBeenCalledOnce();
+    expect(getRecentlyCompletedMatches).not.toHaveBeenCalled();
   });
 
   it("sends one snapshot webhook per live match returned by the provider", async () => {
@@ -77,7 +77,26 @@ describe("runWorkerOnce scheduling gate", () => {
     expect(webhookClient.send.mock.calls.map(([payload]) => payload.externalMatchId)).toEqual(["match-1", "match-2"]);
   });
 
-  it("reconciles completed matches after live polling", async () => {
+  it("skips completed reconciliation until the trailing part of a match window", async () => {
+    const getLiveMatches = vi.fn(async () => []);
+    const getRecentlyCompletedMatches = vi.fn(async () => []);
+
+    const result = await runWorkerOnce({
+      provider: fakeProvider(getLiveMatches, getRecentlyCompletedMatches),
+      stateStore: new MemoryStateStore(),
+      webhookClient: fakeWebhookClient(),
+      now: new Date("2026-06-28T18:00:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      status: "polled",
+      liveMatchCount: 0,
+    });
+    expect(getLiveMatches).toHaveBeenCalledOnce();
+    expect(getRecentlyCompletedMatches).not.toHaveBeenCalled();
+  });
+
+  it("reconciles completed matches near the end of a knockout window", async () => {
     const getLiveMatches = vi.fn(async () => []);
     const completedSnapshot = {
       ...fakeSnapshot("match-1", "BRA", "ARG"),
@@ -92,7 +111,7 @@ describe("runWorkerOnce scheduling gate", () => {
       provider: fakeProvider(getLiveMatches, getRecentlyCompletedMatches),
       stateStore: new MemoryStateStore(),
       webhookClient,
-      now: new Date("2026-06-28T18:00:00.000Z"),
+      now: new Date("2026-06-28T21:20:00.000Z"),
     });
 
     expect(result).toMatchObject({
@@ -158,7 +177,7 @@ describe("runWorkerOnce scheduling gate", () => {
       ),
       stateStore: new MemoryStateStore(),
       webhookClient,
-      now: new Date("2026-06-28T18:00:00.000Z"),
+      now: new Date("2026-06-28T21:20:00.000Z"),
     });
 
     expect(webhookClient.send).toHaveBeenCalledTimes(1);

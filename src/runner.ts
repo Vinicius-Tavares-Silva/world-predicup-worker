@@ -73,9 +73,12 @@ export async function runWorkerOnce(options: RunWorkerOnceOptions): Promise<RunW
       syncRunId: syncRun.id,
       activeWindow: decision.activeWindow,
     });
+    const shouldReconcileCompleted = shouldReconcileCompletedMatches(decision.activeWindow, now);
     const [liveMatches, completedMatches] = await Promise.all([
       options.provider.getLiveMatches(),
-      options.provider.getRecentlyCompletedMatches(decision.activeWindow),
+      shouldReconcileCompleted
+        ? options.provider.getRecentlyCompletedMatches(decision.activeWindow)
+        : Promise.resolve([]),
     ]);
     const snapshots = mergeSnapshots(liveMatches, completedMatches);
     logger.info("Provider live match fetch completed", {
@@ -83,6 +86,7 @@ export async function runWorkerOnce(options: RunWorkerOnceOptions): Promise<RunW
       syncRunId: syncRun.id,
       liveMatchCount: liveMatches.length,
       completedMatchCount: completedMatches.length,
+      completedReconciliation: shouldReconcileCompleted ? "enabled" : "skipped",
       mergedMatchCount: snapshots.length,
     });
 
@@ -160,6 +164,15 @@ function mergeSnapshots(
   }
 
   return [...snapshots.values()];
+}
+
+const completedReconciliationWindowMs = 15 * 60_000;
+
+function shouldReconcileCompletedMatches(
+  window: { endsAt: string },
+  now: Date,
+): boolean {
+  return now.getTime() >= new Date(window.endsAt).getTime() - completedReconciliationWindowMs;
 }
 
 async function deliverPayload(
